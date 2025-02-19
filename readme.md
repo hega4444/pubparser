@@ -23,7 +23,7 @@ Install all required dependencies using:
 
 1. Clone the repository:
 
-    git clone https://github.com/yourusername/academic-graph-extractor.git
+    git clone https://github.com/hega4444/pubparser
     cd academic-graph-extractor
 
 2. Install dependencies:
@@ -101,4 +101,4 @@ This project is licensed under the MIT License - see the LICENSE file for detail
 For any questions or feedback, please open an issue or reach out to the maintainers.
 
 ---
-Made with ❤️ by [Your Name] 
+Made with ❤️ by hega4444
