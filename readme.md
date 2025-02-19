@@ -24,13 +24,17 @@ Install all required dependencies using:
 1. Clone the repository:
 
     git clone https://github.com/hega4444/pubparser
-    cd academic-graph-extractor
+    cd pubparser
 
 2. Install dependencies:
 
     pip install -r requirements.txt
 
-3. Configure your environment variables:
+3. Install spaCy English language model:
+
+    python -m spacy download en_core_web_sm
+
+4. Configure your environment variables:
 
     cp .env.example .env
 
@@ -38,7 +42,7 @@ Install all required dependencies using:
 
 Basic usage example:
 
-    from parser import HTMLParser
+    from main import HTMLParser
     from graph import PublicationGraph
 
     # Initialize parser

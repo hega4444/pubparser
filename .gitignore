@@ -70,5 +70,3 @@ coverage.xml
 # Project specific
 output/
 temp/
-*.html
-!article.html  # Keep article.html as it's part of the project

@@ -1,4 +1,4 @@
-# parser.py
+# main.py
 
 # This file contains the main function for the document parser
 # It is responsible for validating the environment, creating the workflow graph,
@@ -58,14 +58,14 @@ async def main():
     # Validate environment before starting
     validate_env()
     
-    # Process a single document
+    # Process a single document (bad article case)
     try:
-        final_state = await process_html_document("article.html")
-        print("Processing completed!")
-        print("Final state:", final_state.to_json())
+        final_state = await process_html_document("examples/bad_article.html")
+        print("✅ Processing completed!")
+        print("📄 Final state:", final_state.to_json())
         
     except Exception as e:
-        print(f"Error processing document: {str(e)}")
+        print(f"❌ Error processing document: {str(e)}")
 
 def run_parser():
     """Helper function to run the async main function"""
