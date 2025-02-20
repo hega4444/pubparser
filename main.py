@@ -111,38 +111,6 @@ def run_parser():
     """Helper function to run the async main function"""
     asyncio.run(main())
 
-def process_files(input_dir: str):
-    """Process all HTML files in the input directory in numerical order"""
-    # Get all HTML files and sort them
-    html_files = sorted([
-        f for f in os.listdir(input_dir) 
-        if f.endswith('.html')
-    ])
-    
-    workflow = create_conversation_graph()
-    
-    for html_file in html_files:
-        file_path = os.path.join(input_dir, html_file)
-        print(f"Processing {html_file}...")
-        
-        try:
-            with open(file_path, 'r', encoding='utf-8') as f:
-                html_content = f.read()
-            
-            # Initialize state with the HTML content
-            state = DocState(
-                raw_html=html_content,
-                raw_html_path=file_path
-            )
-            
-            # Run the workflow
-            final_state = workflow.invoke(state)
-            
-            print(f"Completed processing {html_file}")
-            
-        except Exception as e:
-            print(f"Error processing {html_file}: {e}")
-            continue
 
 if __name__ == "__main__":
     run_parser()
