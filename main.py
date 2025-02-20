@@ -56,25 +56,6 @@ async def process_html_document(
     # Process document and track progress
     final_state = await graph.ainvoke(initial_state)
     
-    # Print progress logs
-    if hasattr(final_state, 'messages'):
-        for msg in final_state.messages:
-            if isinstance(msg, dict):
-                content = msg.get('content', '')
-                if content.startswith('📊 Document Processing Validation Report'):
-                    print(f"\n{content}")
-                elif '✓' in content or '❌' in content:
-                    print(content)
-
-    # Convert final state back to DocState if needed
-    if not isinstance(final_state, DocState):
-        final_state_obj = DocState(raw_html=html_content)
-        final_state_obj.raw_html_path = str(html_path)
-        for key, value in dict(final_state).items():
-            if hasattr(final_state_obj, key):
-                setattr(final_state_obj, key, value)
-        final_state = final_state_obj
-    
     return final_state
 
 async def main():
