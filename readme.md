@@ -1,84 +1,84 @@
-# 🎯 Academic Graph Extractor
+# 💡 PubParser - Publishing Parser
 
-A sophisticated Python tool that transforms academic HTML documents into structured knowledge graphs. Extract citations, authors, references, and research relationships from scientific papers with ease!
+A Python tool that transforms HTML documents into structured data using Google's Gemini LLM, LangGraph, Beautiful Soup, and spaCy. Extract titles, authors, content, and generate summaries with ease! Combines powerful HTML parsing with NLP capabilities for robust document analysis.
 
 ## 🚀 Features
 
-- Extract structured data from academic HTML documents
-- Parse complex publication metadata
-- Identify author networks and collaborations
-- Extract citation graphs and reference networks
+- Extract structured data from HTML documents
+- Parse document metadata (title, date, author)
+- Generate document summaries
+- Extract main content and subheadings
 - Generate clean JSON output
-- Support for multiple academic publisher formats
-- Intelligent entity recognition
-- Robust error handling
+- Intelligent content analysis using Gemini LLM
+- Quality ranking of parsed documents based on extraction confidence
+- Robust error handling and validation
 
 ## 📋 Requirements
 
-Install all required dependencies using:
-
-    pip install -r requirements.txt
+- Python 3.11 (recommended for best compatibility)
+- Google API key for Gemini LLM
 
 ## 🛠️ Installation
 
 1. Clone the repository:
 
-    git clone https://github.com/hega4444/pubparser
-    cd pubparser
+        git clone https://github.com/hega4444/pubparser
+        cd pubparser
 
-2. Install dependencies:
+2. Create and activate virtual environment:
 
-    pip install -r requirements.txt
+        python3.11 -m venv venv
+        source venv/bin/activate  # On Windows: venv\Scripts\activate
 
-3. Install spaCy English language model:
+3. Install dependencies:
 
-    python -m spacy download en_core_web_sm
+        pip install -r requirements.txt
 
-4. Configure your environment variables:
+4. Install spaCy English language model:
 
-    cp .env.example .env
+        python -m spacy download en_core_web_sm
+
+5. Configure your environment:
+
+        cp .env.example .env
+        # Add your Google API key to .env:
+        # GOOGLE_API_KEY=your_api_key_here
 
 ## 🎯 Usage
 
-Basic usage example:
+Place HTML files in the `examples` directory and run:
 
-    from main import HTMLParser
-    from graph import PublicationGraph
+    python main.py
 
-    # Initialize parser
-    parser = HTMLParser()
+The parser will process all HTML files and evaluate their parsing quality. When a document's completion rate exceeds the configured threshold (default 0.7), the structured JSON result will be saved in the `OUTPUT_DIR` directory. This ensures only high-quality parsing results are preserved.
 
-    # Parse academic HTML document
-    publication_data = parser.parse("path/to/paper.html")
+The project comes with three example HTML files demonstrating different parsing challenges:
 
-    # Get structured JSON output
-    json_output = publication_data.to_json()
+- `01_good_article.html`: A well-structured article that's easy to parse
+- `02_bad_article.html`: An article with some structural issues
+- `03_ugly_article.html`: A challenging article with complex formatting
 
-    # Analyze citation network
-    citations = publication_data.get_citations()
-    authors = publication_data.get_authors()
+You can add your own HTML files to the `examples` directory - all files will be processed when running `main.py`.
 
 ## 🔧 Configuration
 
-You can customize the parser behavior by modifying `config.py`:
+Customize the parser behavior in `.env`:
 
-    PARSER_CONFIG = {
-        "extract_references": True,
-        "extract_citations": True,
-        "extract_authors": True,
-        "detect_institutions": True,
-        "output_format": "json"
-    }
+    GOOGLE_API_KEY=your_api_key_here
+    MAX_TITLE_WORDS=10
+    COMPLETION_THRESHOLD=0.7
+    OUTPUT_DIR=output
 
-## 📚 Documentation
+## 📚 Project Structure
 
-The project consists of several key components:
-
-- `parser.py`: HTML parsing and data extraction logic
-- `graph.py`: Knowledge graph construction
-- `state.py`: Parser state management
-- `common.py`: Shared utilities
+- `main.py`: Main entry point and document processing
+- `graph.py`: LangGraph workflow definition
+- `state.py`: Document state management
 - `config.py`: Configuration settings
+- `examples/`: Directory for HTML files to process
+- `output/`: Directory for processed JSON output
+
+View the complete source code on [GitHub](https://github.com/hega4444/pubparser)
 
 ## 🤝 Contributing
 
@@ -94,15 +94,7 @@ Contributions are welcome! Please feel free to submit a Pull Request.
 
 This project is licensed under the MIT License - see the LICENSE file for details.
 
-## ✨ Acknowledgments
+## ‍💻 Author
 
-- Thanks to all contributors
-- Inspired by the need for better academic data extraction
-- Built with Python 🐍
 
-## 📞 Contact
-
-For any questions or feedback, please open an issue or reach out to the maintainers.
-
----
-Made with ❤️ by hega4444
+Made with ❤️ by [@hega4444](https://github.com/hega4444)

@@ -82,25 +82,44 @@ async def main():
     """Main entry point for the document parser"""
     validate_env()
     
-    try:
-        final_state = await process_html_document("examples/bad_article.html")
-        print("\n✅ Processing completed!")
+    # Get all HTML files from examples directory
+    examples_dir = Path("examples")
+    html_files = list(examples_dir.glob("*.html"))
+    
+    if not html_files:
+        print("❌ No HTML files found in examples directory")
+        return
         
-        # Print final summary
-        print("\n📄 Final State Summary:")
-        summary = {
-            "Title": final_state.title or "No title",
-            "Status": final_state.processing_status,
-            "Completion Rate": f"{final_state.completion_rate:.2f}",
-            "Analysis Status": [
-                msg for msg in final_state.analysis_status
-                if msg.startswith(("Successfully", "Error", "Could not"))
-            ]
-        }
-        print(json.dumps(summary, indent=2))
+    print(f"📁 Found {len(html_files)} HTML files to process")
+    
+    # Process each file
+    for html_file in html_files:
+        print(f"\n{'='*50}")
+        print(f"📄 Processing {html_file.name}")
+        print('='*50)
         
-    except Exception as e:
-        print(f"❌ Error processing document: {str(e)}")
+        try:
+            final_state = await process_html_document(html_file)
+            print("\n✅ Processing completed!")
+            
+            # Print final summary
+            print("\n📄 Final State Summary:")
+            summary = {
+                "Title": final_state.title or "No title",
+                "Status": final_state.processing_status,
+                "Completion Rate": f"{final_state.completion_rate:.2f}",
+                "Analysis Status": [
+                    msg for msg in final_state.analysis_status
+                    if msg.startswith(("Successfully", "Error", "Could not"))
+                ]
+            }
+            print(json.dumps(summary, indent=2))
+            
+        except Exception as e:
+            print(f"❌ Error processing {html_file.name}: {str(e)}")
+            continue  # Move to next file
+    
+    print("\n✨ All files processed!")
 
 def run_parser():
     """Helper function to run the async main function"""
