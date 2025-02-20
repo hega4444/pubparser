@@ -446,14 +446,12 @@ def create_conversation_graph():
     # Add edges
     workflow.add_edge(START, "parse_html")
     workflow.add_edge("parse_html", "find_title")
-    
-    # Fix: Map the validate_title returns to correct nodes
     workflow.add_conditional_edges(
         "find_title",
         validate_title,
         {
             "refine_title": "refine_title",
-            "update_title_state": "update_title_state"  # Match the actual return value
+            "update_title_state": "update_title_state" 
         }
     )
     
