@@ -7,6 +7,8 @@ import json
 
 # Define field types with annotations, used to help the
 # LLM understand the context of the workflow
+# elements with ANALYZABLE_PREFIX are used to help the LLM understand the context of the workflow
+# and the fields that it can use to generate the output
 RawHtmlType: TypeAlias = Annotated[
     str, "Raw HTML content of the article to be processed"
 ]
@@ -51,6 +53,10 @@ TextPieceType: TypeAlias = Annotated[
     List[Tuple[str, str]],
     "List of tuples containing (tag_name, text_content) extracted from HTML elements",
 ]
+CreatedAtType: TypeAlias = Annotated[
+    Optional[datetime], 
+    "Timestamp when the document was processed"
+]
 
 
 @dataclass
@@ -83,6 +89,10 @@ class DocState:
     analysis_status: List[str] = field(default_factory=list)
     completion_rate: float = 0.0
 
+    # Additional fields
+    created_at: CreatedAtType = None
+    raw_html_path: Optional[str] = None
+
     def __init__(
         self,
         raw_html: str,
@@ -99,6 +109,8 @@ class DocState:
         processing_status: str = "pending",
         analysis_status: Optional[List[str]] = None,
         completion_rate: float = 0.0,
+        created_at: Optional[datetime] = None,
+        raw_html_path: Optional[str] = None,
     ):
         """Initialize a new DocState instance."""
         self.raw_html = raw_html
@@ -115,14 +127,13 @@ class DocState:
         self.processing_status = processing_status
         self.analysis_status = analysis_status or []
         self.completion_rate = completion_rate
+        self.created_at = created_at
+        self.raw_html_path = raw_html_path
 
     def to_json(self) -> str:
         """Convert the document state to JSON format"""
         return json.dumps(
             {
-                "text_pieces": [(tag, text) for tag, text in self.text_pieces]
-                if self.text_pieces
-                else [],
                 "title": self.title,
                 "date": self.date.isoformat() if self.date else None,
                 "author": self.author,
@@ -131,6 +142,9 @@ class DocState:
                 "summary": self.summary,
                 "processing_status": self.processing_status,
                 "error_message": self.error_message,
+                "completion_rate": self.completion_rate,
+                "analysis_status": self.analysis_status,
+                "created_at": self.created_at.isoformat() if self.created_at else None
             },
             indent=2,
         ) 

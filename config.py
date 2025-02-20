@@ -13,6 +13,9 @@ load_dotenv()
 # API Keys
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 
+# LLM Model
+LLM_MODEL = "gemini-2.0-flash"
+
 # Title Processing Settings
 MAX_TITLE_WORDS = int(os.getenv("MAX_TITLE_WORDS", "10"))
 

@@ -18,10 +18,11 @@ from config import (
     COMPLETION_THRESHOLD,
     ANALYZABLE_PREFIX,
     OUTPUT_DIR,
-    validate_env,
+    LLM_MODEL,
 )
 from common import get_field_descriptions
 import os
+from pathlib import Path
 
 from state import DocState
 
@@ -34,7 +35,7 @@ tool_node = ToolNode(tools)
 
 # Initialize the LLM with API key from environment
 llm = ChatGoogleGenerativeAI(
-    model="gemini-2.0-flash",
+    model=LLM_MODEL,
     google_api_key=GOOGLE_API_KEY,
 )
 
@@ -105,10 +106,18 @@ def find_title(state: DocState) -> DocState:
         text_pieces: List[Tuple[str, str]], max_words: int
     ) -> List[Tuple[str, str]]:
         """Get potential title candidates with fewer than max_words words"""
-        candidates = [
-            (tag, text) for tag, text in text_pieces if count_words(text) <= max_words
+        # Get all candidates that meet the word count criteria
+        all_candidates = [
+            (tag, text) for tag, text in text_pieces 
+            if count_words(text) <= max_words
         ]
-        return candidates[:5]
+        
+        # Split into h1 and non-h1 candidates
+        h1_candidates = [(tag, text) for tag, text in all_candidates if tag == "h1"]
+        other_candidates = [(tag, text) for tag, text in all_candidates if tag != "h1"]
+        
+        # Combine h1s first, then others, limiting to 5 total
+        return (h1_candidates + other_candidates)[:5]
 
     state.current_step = "finding_title"
 
@@ -316,16 +325,20 @@ def analyze_body(state: DocState) -> DocState:
 
                 # Update state with response
                 if field_name == "date":
-                    # Parse date string to datetime
-                    setattr(
-                        state,
-                        field_name,
-                        datetime.fromisoformat(response.content.strip()),
-                    )
+                    try:
+                        date_str = response.content.strip()
+                        # Try different date formats
+                        if len(date_str) == 7:  # Format like "2025-02"
+                            state.date = datetime.strptime(date_str, "%Y-%m").replace(day=1)
+                        else:
+                            state.date = datetime.fromisoformat(date_str)
+                        state.analysis_status.append(f"Successfully processed {field_name}")
+                    except ValueError:
+                        state.date = None
+                        state.analysis_status.append(f"Could not parse date from: {date_str}")
                 else:
                     setattr(state, field_name, response.content.strip())
-
-                state.analysis_status.append(f"Successfully processed {field_name}")
+                    state.analysis_status.append(f"Successfully processed {field_name}")
 
             except Exception as e:
                 state.analysis_status.append(f"Error processing {field_name}: {str(e)}")
@@ -337,119 +350,80 @@ def analyze_body(state: DocState) -> DocState:
     return state
 
 
-def validate_json(state: DocState) -> Literal["save_json", "__end__"]:
+def validate_json(state: DocState) -> DocState:
     """
     Validate the processed document and calculate completion rate.
-    Returns save_json if completion rate meets threshold, otherwise ends the graph with a detailed report.
     """
     try:
         # Get total number of analyzable fields
         analyzable_fields = get_field_descriptions(DocState, analyzable_only=True)
         total_fields = len(analyzable_fields)
 
-        # Analyze each field's status
-        field_status = []
-        successful_fields = 0
-        error_count = 0
-
-        # Check each analyzable field
-        for field_name in analyzable_fields:
-            field_value = getattr(state, field_name)
-            success_msg = next(
-                (
-                    msg
-                    for msg in state.analysis_status
-                    if f"Successfully processed {field_name}" in msg
-                ),
-                None,
-            )
-            error_msg = next(
-                (
-                    msg
-                    for msg in state.analysis_status
-                    if f"Error processing {field_name}" in msg
-                ),
-                None,
-            )
-
-            if success_msg:
-                successful_fields += 1
-                status = "✓ Success"
-            elif error_msg:
-                error_count += 1
-                status = f"✗ Error: {error_msg}"
-            else:
-                error_count += 1
-                status = "✗ Not processed"
-
-            field_status.append(f"{field_name}: {status}")
-
-        # Title quality factor
-        title_quality = 1.0 if "refine_title" not in state.current_step else 0.8
+        # Count successful fields and errors
+        successful_fields = len([
+            msg for msg in state.analysis_status 
+            if msg.startswith("Successfully processed")
+        ])
+        error_count = len([
+            msg for msg in state.analysis_status 
+            if msg.startswith(("Error", "Could not"))
+        ])
 
         # Calculate completion rate
-        state.completion_rate = (
-            (successful_fields / total_fields) * 0.6
-            + title_quality * 0.3  # Weight for successful fields
-            + (1 - error_count / total_fields)  # Weight for title quality
-            * 0.1  # Weight for error ratio
-        )
+        state.completion_rate = float(successful_fields) / float(total_fields)
+
+        # Set status based on completion rate
+        state.processing_status = "complete" if state.completion_rate >= COMPLETION_THRESHOLD else "incomplete"
 
         # Prepare validation report
         validation_report = [
             "📊 Document Processing Validation Report",
             "=====================================",
             f"✨ Completion Rate: {state.completion_rate:.2f} (Threshold: {COMPLETION_THRESHOLD})",
-            f"📝 Title Quality: {'✅ Good' if title_quality == 1.0 else '⚠️ Needed Refinement'}",
             f"📈 Successful Fields: {successful_fields}/{total_fields}",
             f"❌ Errors: {error_count}",
+            f"📝 Status: {state.processing_status.upper()}",
             "",
             "🔍 Field Status:",
             "------------",
-        ] + field_status
+        ] + state.analysis_status
 
         # Add report to messages
         state.messages.append(
             {"role": "system", "content": "\n".join(validation_report)}
         )
 
-        # Determine next step
-        if state.completion_rate >= COMPLETION_THRESHOLD:
-            return "save_json"
-        else:
-            state.error_message = (
-                f"Document failed validation. See processing report for details.\n"
-                f"Completion rate {state.completion_rate:.2f} below threshold {COMPLETION_THRESHOLD}"
-            )
-            state.processing_status = "error"
-            return END or "__end__"
-
     except Exception as e:
         state.error_message = f"Error in validate_json: {str(e)}"
         state.processing_status = "error"
+        state.completion_rate = 0.0
         state.messages.append(
             {"role": "system", "content": f"Validation failed with error: {str(e)}"}
         )
-        return END or "__end__"
+
+    return state
 
 
 def save_json(state: DocState) -> DocState:
-    """
-    Save the final processed state as JSON and log the action.
-    Uses DocState's to_json method to serialize the state.
-    """
+    """Save the final processed state as JSON and log the action."""
     state.current_step = "saving_json"
 
     try:
+        # Set creation timestamp
+        state.created_at = datetime.now()
+
         # Ensure output directory exists
         os.makedirs(OUTPUT_DIR, exist_ok=True)
 
+        # Get original filename without extension
+        original_name = Path(state.raw_html_path).stem if hasattr(state, 'raw_html_path') else "doc"
+        
+        # Generate filename with timestamp (YY format)
+        timestamp = state.created_at.strftime("%y%m%d_%H%M%S")
+        filename = os.path.join(OUTPUT_DIR, f"doc_{original_name}_{timestamp}.json")
+
         # Get JSON representation using DocState's method
         json_output = state.to_json()
-
-        # Generate filename with timestamp
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        filename = os.path.join(OUTPUT_DIR, f"processed_doc_{timestamp}.json")
 
         # Save to file
         with open(filename, "w", encoding="utf-8") as f:
@@ -459,7 +433,6 @@ def save_json(state: DocState) -> DocState:
         state.messages.append(
             {"role": "system", "content": f"💾 Document successfully saved to {filename}"}
         )
-        state.processing_status = "completed"
 
     except Exception as e:
         state.error_message = f"Error saving JSON: {str(e)}"
@@ -471,22 +444,15 @@ def save_json(state: DocState) -> DocState:
     return state
 
 
+def complete_workflow(state: DocState) -> DocState:
+    """Final node to mark workflow completion"""
+    state.current_step = "completing"
+    return state
+
+
 def create_conversation_graph():
     """
     Create the conversation graph for the document processing workflow.
-    
-    The graph defines the following processing flow:
-    1. Starts with parsing raw HTML to extract text elements
-    2. Attempts to find a title from the parsed content
-    3. If title needs refinement, goes to refine_title step, otherwise proceeds
-    4. Analyzes the document body for key information
-    5. Validates the extracted JSON data
-    6. If validation passes, saves the JSON output
-    7. Ends processing with either success or error status
-    
-    The graph handles errors at each step by updating the DocState with 
-    error messages and status. Conditional edges allow for branching based
-    on validation results.
     """
     workflow = StateGraph(DocState)
 
@@ -497,6 +463,7 @@ def create_conversation_graph():
     workflow.add_node("analyze_body", analyze_body)
     workflow.add_node("validate_json", validate_json)
     workflow.add_node("save_json", save_json)
+    workflow.add_node("complete", complete_workflow)  # Add completion node
 
     # Add edges
     workflow.add_edge(START, "parse_html")
@@ -504,8 +471,10 @@ def create_conversation_graph():
     workflow.add_conditional_edges("find_title", validate_title)
     workflow.add_edge("refine_title", "analyze_body")
     workflow.add_edge("analyze_body", "validate_json")
-
-    # Add conditional edge for validation
-    workflow.add_conditional_edges("validate_json", validate_json)
+    workflow.add_conditional_edges(
+        "validate_json",
+        lambda x: "save_json" if x.completion_rate >= COMPLETION_THRESHOLD else END
+    )
+    workflow.add_edge("save_json", "complete")  # Add edge to completion node
 
     return workflow.compile()
