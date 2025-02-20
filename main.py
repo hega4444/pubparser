@@ -18,10 +18,9 @@ from config import validate_env
 from graph import create_conversation_graph
 from state import DocState
 from absl import logging as absl_logging
-import json
 from langgraph.graph import START, END
 
-# Suppress all warnings
+# Suppress warnings
 logging.getLogger('absl').setLevel(logging.ERROR)
 logging.getLogger('grpc').setLevel(logging.ERROR)
 logging.getLogger('google.generativeai').setLevel(logging.ERROR)
@@ -82,9 +81,9 @@ async def main():
     """Main entry point for the document parser"""
     validate_env()
     
-    # Get all HTML files from examples directory
+    # Get all HTML files from examples directory and sort them
     examples_dir = Path("examples")
-    html_files = list(examples_dir.glob("*.html"))
+    html_files = sorted(list(examples_dir.glob("*.html")))
     
     if not html_files:
         print("❌ No HTML files found in examples directory")
@@ -102,19 +101,6 @@ async def main():
             final_state = await process_html_document(html_file)
             print("\n✅ Processing completed!")
             
-            # Print final summary
-            print("\n📄 Final State Summary:")
-            summary = {
-                "Title": final_state.title or "No title",
-                "Status": final_state.processing_status,
-                "Completion Rate": f"{final_state.completion_rate:.2f}",
-                "Analysis Status": [
-                    msg for msg in final_state.analysis_status
-                    if msg.startswith(("Successfully", "Error", "Could not"))
-                ]
-            }
-            print(json.dumps(summary, indent=2))
-            
         except Exception as e:
             print(f"❌ Error processing {html_file.name}: {str(e)}")
             continue  # Move to next file
@@ -124,6 +110,39 @@ async def main():
 def run_parser():
     """Helper function to run the async main function"""
     asyncio.run(main())
+
+def process_files(input_dir: str):
+    """Process all HTML files in the input directory in numerical order"""
+    # Get all HTML files and sort them
+    html_files = sorted([
+        f for f in os.listdir(input_dir) 
+        if f.endswith('.html')
+    ])
+    
+    workflow = create_conversation_graph()
+    
+    for html_file in html_files:
+        file_path = os.path.join(input_dir, html_file)
+        print(f"Processing {html_file}...")
+        
+        try:
+            with open(file_path, 'r', encoding='utf-8') as f:
+                html_content = f.read()
+            
+            # Initialize state with the HTML content
+            state = DocState(
+                raw_html=html_content,
+                raw_html_path=file_path
+            )
+            
+            # Run the workflow
+            final_state = workflow.invoke(state)
+            
+            print(f"Completed processing {html_file}")
+            
+        except Exception as e:
+            print(f"Error processing {html_file}: {e}")
+            continue
 
 if __name__ == "__main__":
     run_parser()

@@ -50,7 +50,7 @@ Place HTML files in the `examples` directory and run:
 
     python main.py
 
-The parser will process all HTML files and evaluate their parsing quality. When a document's completion rate exceeds the configured threshold (default 0.7), the structured JSON result will be saved in the `OUTPUT_DIR` directory. This ensures only high-quality parsing results are preserved.
+The parser will process all HTML files and evaluate their parsing quality. When a document's completion rate exceeds the `COMPLETION_THRESHOLD` (default 0.7), the structured JSON result will be saved in the `OUTPUT_DIR` directory. This ensures only high-quality parsing results are preserved.
 
 The project comes with three example HTML files demonstrating different parsing challenges:
 

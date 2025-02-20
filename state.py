@@ -87,7 +87,7 @@ class DocState:
 
     # Analysis status fields
     analysis_status: List[str] = field(default_factory=list)
-    completion_rate: float = 0.0
+    completion_rate: float = 0.0  # Initialize here only
 
     # Additional fields
     created_at: CreatedAtType = None
@@ -126,7 +126,7 @@ class DocState:
         self.error_message = error_message
         self.processing_status = processing_status
         self.analysis_status = analysis_status or []
-        self.completion_rate = completion_rate
+        self.completion_rate = completion_rate  # Keep this one
         self.created_at = created_at
         self.raw_html_path = raw_html_path
 

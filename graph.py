@@ -20,9 +20,15 @@ from config import (
     OUTPUT_DIR,
     LLM_MODEL,
 )
-from common import get_field_descriptions
+from common import (
+    get_field_descriptions, 
+    validate_title_text, 
+    save_document_json,
+    append_analysis_status
+)
 import os
 from pathlib import Path
+import re
 
 from state import DocState
 
@@ -97,7 +103,6 @@ def find_title(state: DocState) -> DocState:
     Looks for text pieces with fewer than MAX_TITLE_WORDS words.
     Takes the first 5 candidates in order of appearance.
     """
-
     def count_words(text: str) -> int:
         """Helper function to count words in a text string"""
         return len(text.split())
@@ -137,65 +142,68 @@ def find_title(state: DocState) -> DocState:
                     + "\n".join([f"- ({tag}) {text}" for tag, text in candidates]),
                 }
             )
+            # Don't add status here - let validate_title handle it
         else:
             state.error_message = "No suitable title candidates found"
             state.processing_status = "error"
+            # Don't add status here - let validate_title handle it
 
     except Exception as e:
         state.error_message = f"Error finding title: {str(e)}"
         state.processing_status = "error"
+        # Don't add status here - let validate_title handle it
 
     return state
 
 
 def validate_title(state: DocState) -> Literal["refine_title", "analyze_body"]:
     """
-    Verify if the extracted title is valid by checking if it has more nouns/adjectives than verbs.
-    This helps identify phrase-like titles vs sentence-like text.
+    Verify if the extracted title is valid by checking multiple criteria.
+    Updates completion rate if validation fails.
     """
     if not state.title:
+        state.completion_rate = max(0.0, state.completion_rate - 0.2)
+        state.analysis_status = [s for s in state.analysis_status if not s.startswith(("Successfully processed title", "Title needed"))]
+        # Just add to messages, don't print
+        state.messages.append({
+            "role": "system",
+            "content": "Title needed refinement (-10% penalty)"
+        })
         return "refine_title"
 
-    try:
-        doc = nlp(state.title)
+    # Use auxiliary function to check if the title is valid
+    is_valid, validation_failures = validate_title_text(state.title)
 
-        # Count nouns, proper nouns, and adjectives
-        content_words = sum(
-            1 for token in doc if token.pos_ in ["NOUN", "PROPN", "ADJ"]
-        )
-        # Count verbs
-        verbs = sum(1 for token in doc if token.pos_ == "VERB")
+    if not is_valid:
+        # Penalize completion rate for each validation failure
+        penalty = min(0.1 * len(validation_failures), 0.3)  # Cap penalty at 0.3
+        state.completion_rate = max(0.0, state.completion_rate - penalty)
+        
+        # Add validation failures to messages
+        failure_msg = "Title needed refinement (-10% penalty): " + "; ".join(validation_failures)
+        state.messages.append({
+            "role": "system",
+            "content": failure_msg
+        })
+        
+        # Clear any existing title status
+        state.analysis_status = [s for s in state.analysis_status if not s.startswith(("Successfully processed title", "Title needed"))]
+        return "refine_title"
 
-        # Add validation details to messages for potential refinement
-        state.messages.append(
-            {
-                "role": "system",
-                "content": (
-                    f"Title validation:\n"
-                    f"- Content words (nouns/adjectives): {content_words}\n"
-                    f"- Verbs: {verbs}\n"
-                    f"- Title: {state.title}"
-                ),
-            }
-        )
-
-        # If we have more content words than verbs, it's likely a good title
-        if content_words > verbs:
-            return "analyze_body"
-
-    except Exception as e:
-        state.messages.append(
-            {"role": "system", "content": f"Title validation failed: {str(e)}"}
-        )
-
-    # If anything fails or title isn't good enough, go to refinement
-    return "refine_title"
+    # Clear any existing title status
+    state.analysis_status = [s for s in state.analysis_status if not s.startswith(("Successfully processed title", "Title needed"))]
+    # Just add to messages, don't print
+    state.messages.append({
+        "role": "system",
+        "content": "Successfully processed title on first attempt"
+    })
+    return "analyze_body"
 
 
 def refine_title(state: DocState) -> DocState:
     """
-    Improve or fix the title using LLM analysis of the text pieces and previous candidates.
-    Uses context from validation and previous title attempts to generate a better title.
+    Improve or fix the title using LLM analysis.
+    The completion rate has already been penalized in validate_title.
     """
     state.current_step = "refining_title"
 
@@ -277,19 +285,19 @@ def refine_title(state: DocState) -> DocState:
             }
         )
         state.title = new_title
+        
+        # Don't add status here - let validate_title handle it when it's called next
 
     except Exception as e:
         state.error_message = f"Error refining title: {str(e)}"
         state.processing_status = "error"
+        state.completion_rate = max(0.0, state.completion_rate - 0.1)
 
     return state
 
 
 def analyze_body(state: DocState) -> DocState:
-    """
-    Analyze the document by extracting information for each annotated field.
-    Uses LLM to process each field based on its annotation description.
-    """
+    """Analyze the document by extracting information for each annotated field."""
     state.current_step = "analyzing_body"
 
     try:
@@ -306,42 +314,108 @@ def analyze_body(state: DocState) -> DocState:
                     and v is not None
                 }
 
-                # Simulate RAG queries using the current state and LLM (TODO: Implement RAG)
+                # Create a field-specific prompt with format guidance
                 context_message = {
-                    "role": "user",
+                    "role": "system",
                     "content": f"""
-                    Current document state:
-                    {json.dumps(current_state, default=str, indent=2)}
+                    You are a document analysis assistant. Extract ONLY the {field_name} from the text.
+                    
+                    {
+                    '''For subheadings, extract the full heading including any descriptive text after dashes.
+                    Return as a JSON array of strings.
+                    If a heading contains a dash, keep the entire text.''' if field_name == 'subheadings' else
+                    f'Return in this exact JSON format: {{"{field_name}": "your extracted value here"}}'
+                    }
+                    
+                    Example format for subheadings:
+                    {{
+                        "subheadings": [
+                            "Abstract - A Brief Overview",
+                            "Introduction - Main Concepts",
+                            "Methods - Experimental Setup",
+                            "Results - Key Findings"
+                        ]
+                    }}
                     
                     Task: {description.replace(ANALYZABLE_PREFIX, '')}
-                    
-                    Available text:
-                    {' '.join(text for _, text in state.text_pieces[:10])}  # First 10 pieces for context
-                    """,
+                    """
+                }
+
+                user_message = {
+                    "role": "user",
+                    "content": f"""
+                    Text to analyze:
+                    {' '.join(text for _, text in state.text_pieces[:10])}
+                    """
                 }
 
                 # Get LLM response
-                response = llm.invoke([context_message])
+                response = llm.invoke([context_message, user_message])
+                response_text = response.content.strip()
 
-                # Update state with response
-                if field_name == "date":
-                    try:
-                        date_str = response.content.strip()
-                        # Try different date formats
-                        if len(date_str) == 7:  # Format like "2025-02"
-                            state.date = datetime.strptime(date_str, "%Y-%m").replace(day=1)
+                # Handle markdown code blocks
+                if response_text.startswith('```'):
+                    # Remove the first line (```json) and last line (```)
+                    response_text = '\n'.join(response_text.split('\n')[1:-1])
+
+                try:
+                    # Parse the JSON response
+                    parsed_response = json.loads(response_text)
+                    field_value = parsed_response.get(field_name)
+
+                    if field_value:
+                        if field_name == "date":
+                            # Handle date parsing
+                            if len(field_value) == 7:  # Format like "2025-02"
+                                state.date = datetime.strptime(field_value, "%Y-%m").replace(day=1)
+                            else:
+                                state.date = datetime.fromisoformat(field_value)
+                        elif field_name == "subheadings":
+                            # Ensure subheadings is always a list
+                            if isinstance(field_value, str):
+                                # Convert comma-separated string to list, preserving dash content
+                                subheadings = [h.strip() for h in field_value.split(',')]
+                            elif isinstance(field_value, list):
+                                subheadings = field_value
+                            else:
+                                raise ValueError(f"Unexpected subheadings format: {type(field_value)}")
+                            
+                            # Clean up each subheading while preserving descriptive text
+                            cleaned_subheadings = []
+                            for heading in subheadings:
+                                # Remove any extra whitespace but keep the dash and description
+                                cleaned = ' '.join(heading.split())
+                                if cleaned:
+                                    cleaned_subheadings.append(cleaned)
+                            
+                            setattr(state, field_name, cleaned_subheadings)
                         else:
-                            state.date = datetime.fromisoformat(date_str)
-                        state.analysis_status.append(f"Successfully processed {field_name}")
-                    except ValueError:
-                        state.date = None
-                        state.analysis_status.append(f"Could not parse date from: {date_str}")
-                else:
-                    setattr(state, field_name, response.content.strip())
-                    state.analysis_status.append(f"Successfully processed {field_name}")
+                            # Handle other fields
+                            setattr(state, field_name, field_value)
+                        
+                        # Don't append status here - let validate_json handle it
+                    else:
+                        state.messages.append({
+                            "role": "system",
+                            "content": f"No value found for {field_name}"
+                        })
+
+                except json.JSONDecodeError:
+                    state.messages.append({
+                        "role": "system",
+                        "content": f"Failed to parse JSON for {field_name}"
+                    })
+                except ValueError as e:
+                    state.messages.append({
+                        "role": "system",
+                        "content": f"Error processing {field_name}: {str(e)}"
+                    })
 
             except Exception as e:
-                state.analysis_status.append(f"Error processing {field_name}: {str(e)}")
+                state.messages.append({
+                    "role": "system",
+                    "content": f"Error processing {field_name}: {str(e)}"
+                })
 
     except Exception as e:
         state.error_message = f"Error in analyze_body: {str(e)}"
@@ -353,48 +427,73 @@ def analyze_body(state: DocState) -> DocState:
 def validate_json(state: DocState) -> DocState:
     """
     Validate the processed document and calculate completion rate.
+    Takes into account previous penalties from title validation/refinement.
     """
     try:
         # Get total number of analyzable fields
         analyzable_fields = get_field_descriptions(DocState, analyzable_only=True)
-        total_fields = len(analyzable_fields)
 
-        # Count successful fields and errors
-        successful_fields = len([
-            msg for msg in state.analysis_status 
-            if msg.startswith("Successfully processed")
-        ])
-        error_count = len([
-            msg for msg in state.analysis_status 
-            if msg.startswith(("Error", "Could not"))
-        ])
+        # Find the most recent title status from messages
+        title_status_messages = [
+            msg for msg in state.messages  
+            if isinstance(msg, dict) and 
+            any(title_msg in msg.get("content", "") 
+                for title_msg in ["Title needed refinement", "Successfully processed title"])
+        ]
+        
+        # Get the latest title status message
+        latest_title_msg = title_status_messages[-1]["content"] if title_status_messages else None
 
-        # Calculate completion rate
-        state.completion_rate = float(successful_fields) / float(total_fields)
+        # Reset analysis status and start fresh
+        state.analysis_status = []
 
-        # Set status based on completion rate
-        state.processing_status = "complete" if state.completion_rate >= COMPLETION_THRESHOLD else "incomplete"
+        # First handle title status
+        title_status = None
+        if latest_title_msg:
+            if "Title needed refinement" in latest_title_msg:
+                title_status = "Title needed refinement (-10% penalty)"
+                state.completion_rate = 0.9  # Apply penalty
+            else:
+                title_status = "Successfully processed title on first attempt"
+                state.completion_rate = 1.0
+        else:
+            # If no title status found, check if title exists and is valid
+            if state.title:
+                title_status = "Successfully processed title on first attempt"
+                state.completion_rate = 1.0
+            else:
+                title_status = "Title needed refinement (-10% penalty)"
+                state.completion_rate = 0.9
 
-        # Prepare validation report
-        validation_report = [
-            "📊 Document Processing Validation Report",
-            "=====================================",
-            f"✨ Completion Rate: {state.completion_rate:.2f} (Threshold: {COMPLETION_THRESHOLD})",
-            f"📈 Successful Fields: {successful_fields}/{total_fields}",
-            f"❌ Errors: {error_count}",
-            f"📝 Status: {state.processing_status.upper()}",
-            "",
-            "🔍 Field Status:",
-            "------------",
-        ] + state.analysis_status
+        # Add title status to analysis_status and print it
+        append_analysis_status(state, title_status)
 
-        # Add report to messages
-        state.messages.append(
-            {"role": "system", "content": "\n".join(validation_report)}
+        # Add status for each field
+        for field_name in analyzable_fields:
+            if field_name != "title":  # Skip title as we handled it above
+                field_value = getattr(state, field_name, None)
+                if field_value is not None:
+                    append_analysis_status(state, f"Successfully processed {field_name}")
+                else:
+                    append_analysis_status(state, f"Failed to process {field_name}")
+                    state.completion_rate = max(0.0, state.completion_rate - 0.1)
+
+        # Set processing status
+        state.processing_status = (
+            "complete" 
+            if state.completion_rate >= COMPLETION_THRESHOLD
+            else "incomplete"
+        )
+
+        # Add final completion status
+        append_analysis_status(
+            state,
+            f"Parsing completed with {state.completion_rate:.2f} completion rate"
         )
 
     except Exception as e:
-        state.error_message = f"Error in validate_json: {str(e)}"
+        error_msg = f"Error in validate_json: {str(e)}"
+        state.error_message = error_msg
         state.processing_status = "error"
         state.completion_rate = 0.0
         state.messages.append(
@@ -408,38 +507,14 @@ def save_json(state: DocState) -> DocState:
     """Save the final processed state as JSON and log the action."""
     state.current_step = "saving_json"
 
-    try:
-        # Set creation timestamp
-        state.created_at = datetime.now()
-
-        # Ensure output directory exists
-        os.makedirs(OUTPUT_DIR, exist_ok=True)
-
-        # Get original filename without extension
-        original_name = Path(state.raw_html_path).stem if hasattr(state, 'raw_html_path') else "doc"
-        
-        # Generate filename with timestamp (YY format)
-        timestamp = state.created_at.strftime("%y%m%d_%H%M%S")
-        filename = os.path.join(OUTPUT_DIR, f"doc_{original_name}_{timestamp}.json")
-
-        # Get JSON representation using DocState's method
-        json_output = state.to_json()
-
-        # Save to file
-        with open(filename, "w", encoding="utf-8") as f:
-            f.write(json_output)
-
-        # Log success
-        state.messages.append(
-            {"role": "system", "content": f"💾 Document successfully saved to {filename}"}
-        )
-
-    except Exception as e:
-        state.error_message = f"Error saving JSON: {str(e)}"
+    success, message = save_document_json(state)
+    
+    if success:
+        state.messages.append({"role": "system", "content": message})
+    else:
+        state.error_message = "Error saving JSON: " + message
         state.processing_status = "error"
-        state.messages.append(
-            {"role": "system", "content": f"❌ Failed to save document: {str(e)}"}
-        )
+        state.messages.append({"role": "system", "content": message})
 
     return state
 
@@ -463,7 +538,7 @@ def create_conversation_graph():
     workflow.add_node("analyze_body", analyze_body)
     workflow.add_node("validate_json", validate_json)
     workflow.add_node("save_json", save_json)
-    workflow.add_node("complete", complete_workflow)  # Add completion node
+    workflow.add_node("complete", complete_workflow)
 
     # Add edges
     workflow.add_edge(START, "parse_html")
@@ -471,10 +546,7 @@ def create_conversation_graph():
     workflow.add_conditional_edges("find_title", validate_title)
     workflow.add_edge("refine_title", "analyze_body")
     workflow.add_edge("analyze_body", "validate_json")
-    workflow.add_conditional_edges(
-        "validate_json",
-        lambda x: "save_json" if x.completion_rate >= COMPLETION_THRESHOLD else END
-    )
-    workflow.add_edge("save_json", "complete")  # Add edge to completion node
+    workflow.add_edge("validate_json", "save_json")  # Always save, regardless of completion
+    workflow.add_edge("save_json", "complete")
 
     return workflow.compile()
