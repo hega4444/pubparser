@@ -5,11 +5,6 @@
 # and processing the HTML document
 
 import os
-os.environ["GRPC_PYTHON_LOG_LEVEL"] = "error"
-os.environ["GRPC_VERBOSITY"] = "ERROR"
-
-import logging
-logging.getLogger().setLevel(logging.ERROR)
 
 import asyncio
 from pathlib import Path
@@ -20,10 +15,6 @@ from state import DocState
 from absl import logging as absl_logging
 from langgraph.graph import START, END
 
-# Suppress warnings
-logging.getLogger('absl').setLevel(logging.ERROR)
-logging.getLogger('grpc').setLevel(logging.ERROR)
-logging.getLogger('google.generativeai').setLevel(logging.ERROR)
 
 async def process_html_document(
     html_path: Union[str, Path], 
