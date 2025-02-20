@@ -1,3 +1,7 @@
+# common.py
+
+# This file contains auxiliary functions used throughout the project.
+
 from typing import get_type_hints, Dict
 from config import ANALYZABLE_PREFIX
 from datetime import datetime
@@ -6,7 +10,7 @@ import json
 import re
 import spacy
 from pathlib import Path
-from typing import List, Tuple, Literal
+from typing import List, Tuple
 from config import OUTPUT_DIR
 
 # Initialize spaCy
@@ -118,20 +122,139 @@ def validate_title_text(title: str) -> Tuple[bool, List[str]]:
     except Exception as e:
         return False, [f"Validation error: {str(e)}"] 
 
-def append_analysis_status(state, message: str) -> None:
+def update_analysis_status(state, message: str, print_to_terminal: bool = True) -> None:
     """
     Append a message to the analysis_status list and print it to terminal.
     Handles both success and error/warning messages with different formatting.
     """
     # Only print if this is a new message (not already in analysis_status)
-    if message not in state.analysis_status:
-        # Format the message based on its content
-        if any(error_term in message.lower() for error_term in ["error", "failed", "warning", "penalty"]):
-            print(f"\033[91m❌ {message}\033[0m")  # Red text for errors/warnings
-        elif "success" in message.lower():
-            print(f"\033[92m✓ {message}\033[0m")  # Green text for success
-        else:
-            print(f"\033[94mℹ {message}\033[0m")  # Blue text for info
+
+    # Format the message based on its content
+    message_format = (
+        "\033[91m❌" if any(error_term in message.lower() for error_term in ["error", "failed", "warning", "penalty"]) else
+        "\033[92m✓" if "success" in message.lower() else
+        "\033[94mℹ"
+    )
+    if print_to_terminal:
+        print(f"{message_format} {message}\033[0m")
     
+    # Add to messages for the LLM, may be used for debugging
+    state.messages.append({
+            "role": "system",
+            "content": message
+        })
+        
     # Always append to the state
     state.analysis_status.append(message) 
+
+def prepare_field_prompt(field_name: str, description: str, text_pieces: list) -> tuple[dict, dict]:
+    """
+    Prepare field-specific prompt messages for document analysis.
+    
+    Args:
+        field_name: Name of the field to analyze
+        description: Description of what to extract (with ANALYZABLE_PREFIX removed)
+        text_pieces: List of (tag, text) tuples containing document content
+        
+    Returns:
+        tuple[dict, dict]: A tuple of (context_message, user_message) dictionaries
+    """
+    context_message = {
+        "role": "system",
+        "content": f"""
+        You are a document analysis assistant. Extract ONLY the {field_name} from the text.
+        
+        {
+        '''For subheadings, extract the full heading including any descriptive text after dashes.
+        Return as a JSON array of strings.
+        If a heading contains a dash, keep the entire text.''' if field_name == 'subheadings' else
+        f'Return in this exact JSON format: {{"{field_name}": "your extracted value here"}}'
+        }
+        
+        Example format for subheadings:
+        {{
+            "subheadings": [
+                "Abstract - A Brief Overview",
+                "Introduction - Main Concepts",
+                "Methods - Experimental Setup",
+                "Results - Key Findings"
+            ]
+        }}
+        
+        Task: {description.replace(ANALYZABLE_PREFIX, '')}
+        """
+    }
+
+    user_message = {
+        "role": "user",
+        "content": f"""
+        Text to analyze:
+        {' '.join(text for _, text in text_pieces[:10])}
+        """
+    }
+
+    return context_message, user_message 
+
+def parse_and_update_field(state, field_name: str, response_text: str) -> tuple[bool, str]:
+    """
+    Parse LLM response and update state with the extracted field value.
+    
+    Args:
+        state: The DocState instance to update
+        field_name: Name of the field being processed
+        response_text: Raw response text from LLM
+        
+    Returns:
+        tuple[bool, str]: Success status and message
+    """
+    try:
+        # Handle markdown code blocks
+        if response_text.startswith('```'):
+            # Remove the first line (```json) and last line (```)
+            response_text = '\n'.join(response_text.split('\n')[1:-1])
+
+        # Parse the JSON response
+        parsed_response = json.loads(response_text)
+        field_value = parsed_response.get(field_name)
+
+        if not field_value:
+            return False, f"No value found for {field_name}"
+
+        # Process field value based on field type
+        if field_name == "date":
+            # Handle date parsing
+            if len(field_value) == 7:  # Format like "2025-02"
+                state.date = datetime.strptime(field_value, "%Y-%m").replace(day=1)
+            else:
+                state.date = datetime.fromisoformat(field_value)
+        elif field_name == "subheadings":
+            # Ensure subheadings is always a list
+            if isinstance(field_value, str):
+                # Convert comma-separated string to list, preserving dash content
+                subheadings = [h.strip() for h in field_value.split(',')]
+            elif isinstance(field_value, list):
+                subheadings = field_value
+            else:
+                raise ValueError(f"Unexpected subheadings format: {type(field_value)}")
+            
+            # Clean up each subheading while preserving descriptive text
+            cleaned_subheadings = []
+            for heading in subheadings:
+                # Remove any extra whitespace but keep the dash and description
+                cleaned = ' '.join(heading.split())
+                if cleaned:
+                    cleaned_subheadings.append(cleaned)
+            
+            setattr(state, field_name, cleaned_subheadings)
+        else:
+            # Handle other fields
+            setattr(state, field_name, field_value)
+
+        return True, f"Successfully processed {field_name}"
+
+    except json.JSONDecodeError:
+        return False, f"Failed to parse JSON for {field_name}"
+    except ValueError as e:
+        return False, f"Error processing {field_name}: {str(e)}"
+    except Exception as e:
+        return False, f"Unexpected error processing {field_name}: {str(e)}" 
